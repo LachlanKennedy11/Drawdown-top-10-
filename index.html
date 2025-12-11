@@ -110,22 +110,40 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, runTransaction, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Global variables provided by the environment
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // ====================================================================================
+        // Custom Firebase Configuration for GitHub/Local Use 
+        // 
+        // YOUR CONFIGURATION IS NOW HARDCODED HERE!
+        // The project ID ("drawdown-top-10") is used as the appId for the Firestore path.
+        // ====================================================================================
+        const appId = "drawdown-top-10"; 
+        const firebaseConfig = {
+            apiKey: "AIzaSyDcg7qwYnmxaeFx-ZEmLLgLD-ImavUoNRc",
+            authDomain: "drawdown-top-10.firebaseapp.com",
+            projectId: "drawdown-top-10",
+            storageBucket: "drawdown-top-10.firebasestorage.app",
+            messagingSenderId: "766715245594",
+            appId: "1:766715245594:web:696438758bb99495cbcda3",
+            measurementId: "G-B0XJ04JK87"
+        };
+        const initialAuthToken = null; 
+        // ====================================================================================
 
         setLogLevel('debug'); // Enable detailed logging
 
         // Hardcoded application-level password for the Controller role
         const CONTROLLER_PASSWORD = "HartselleBaseball!!"; 
-
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
         
+        // When running here, Object.keys(firebaseConfig).length will be 7 (or more), 
+        // so the system will initialize Firebase correctly.
+        const isConfigMissing = Object.keys(firebaseConfig).length === 0 || !firebaseConfig.projectId;
+
         let userId = null;
         let isController = false;
+        let app = null;
+        let db = null;
+        let auth = null;
+
 
         const GAME_DOC_PATH = `/artifacts/${appId}/public/data/hartselle-board-game/game-state`;
         const BOARD_SIZE = 10;
@@ -180,6 +198,26 @@
         // --- Authentication and Initialization ---
 
         async function authenticateAndInit() {
+            if (isConfigMissing) {
+                // If configuration is missing, display a helpful error message instead of loading indefinitely.
+                loadingDiv.classList.remove('hidden');
+                loadingDiv.innerHTML = `
+                    <div class="p-6 bg-red-100 border-l-4 border-red-500 text-red-700 rounded-xl shadow-md max-w-lg mx-auto mt-4">
+                        <p class="font-bold mb-3 text-xl text-red-600">⚠ Cannot Connect to Database</p>
+                        <p class="mb-3 text-black">The Firebase configuration is missing or incomplete.</p>
+                        <p class="mb-3 font-semibold text-black">To run it successfully, ensure the <code class="font-mono">firebaseConfig</code> object in the script is fully populated with your project details.</p>
+                        <p class="mt-4 text-sm text-gray-700">Once configuration is correct, the "Initializing..." message will go away!</p>
+                    </div>
+                `;
+                return; // Stop the initialization process
+            }
+            
+            // Initialize Firebase services only if config is present
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+
             try {
                 // Set persistence to local to maintain session across refreshes
                 await setPersistence(auth, browserLocalPersistence);
