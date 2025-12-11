@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hartselle Board - Real-Time Sync</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the Red, White, and Black theme */
+        :root {
+            --color-primary-red: #D7263D; /* Strong Red */
+            --color-black: #000000;
+            --color-white: #ffffff;
+        }
+
+        body {
+            background-color: var(--color-black);
+            font-family: 'Inter', sans-serif;
+        }
+
+        .board-cell {
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.4);
+            border: 4px solid var(--color-primary-red); /* Red border */
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* State cycle: White -> Black -> Red */
+        .state-0 {
+            background-color: var(--color-white);
+            color: var(--color-black);
+        }
+        .state-1 {
+            background-color: var(--color-black);
+            color: var(--color-white);
+            font-weight: bold;
+        }
+        .state-2 {
+            background-color: var(--color-primary-red);
+            color: var(--color-white);
+            font-weight: bold;
+            transform: scale(1.05); /* Slight emphasis on red */
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8 flex items-center justify-center min-h-screen">
+
+    <div id="app-container" class="w-full max-w-4xl bg-white rounded-xl shadow-2xl p-6 md:p-10 border-t-8 border-red-600">
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-red-600 mb-2 text-center tracking-wider">
+            Hartselle Spirit Board
+        </h1>
+        <p id="role-display" class="text-gray-700 text-sm text-center mb-6 font-mono"></p>
+
+        <!-- Loading State -->
+        <div id="loading" class="text-center text-red-600 py-20">
+            <svg class="animate-spin h-8 w-8 text-red-600 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p>Initializing Real-Time System...</p>
+        </div>
+
+        <!-- Login/Access Screen -->
+        <div id="login-screen" class="hidden max-w-sm mx-auto p-6 bg-gray-100 rounded-xl shadow-lg border border-red-300">
+            <h2 class="text-2xl font-bold text-black mb-4 text-center">Select Access Type</h2>
+            
+            <!-- Viewer Button -->
+            <button id="view-board-btn" class="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition duration-200 shadow-md mb-4">
+                View Board (Viewer)
+            </button>
+
+            <div class="my-4 text-center text-gray-500 font-semibold">OR</div>
+
+            <!-- Controller Login Form -->
+            <div class="p-4 bg-white rounded-lg border border-gray-300">
+                <h3 class="text-lg font-semibold text-black mb-3">Controller Login</h3>
+                <input type="password" id="controller-password" placeholder="Password" class="w-full p-2 mb-3 rounded-md border border-gray-400 focus:ring-red-500 focus:border-red-500 text-black">
+                <button id="controller-login-btn" class="w-full py-2 bg-black hover:bg-gray-800 text-white font-bold rounded-lg transition duration-200 shadow-md">
+                    Log In (Controller)
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-3 text-center">Only one controller can be active at a time.</p>
+        </div>
+
+
+        <!-- Controller Input Form -->
+        <div id="input-form-container" class="hidden mb-8 p-4 bg-gray-100 rounded-lg border-2 border-red-500">
+            <h2 class="text-xl font-semibold text-red-600 mb-3">Controller Panel</h2>
+            <div id="message-box" class="hidden p-3 mb-4 rounded text-sm font-medium"></div>
+            <label for="numbers-input" class="block text-black mb-2">
+                Input 10 numbers (comma-separated):
+            </label>
+            <textarea id="numbers-input" rows="2" class="w-full p-2 rounded-md bg-white text-black border border-gray-600 focus:ring-red-500 focus:border-red-500"></textarea>
+            <button id="set-numbers-btn" class="mt-3 w-full py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition duration-200 shadow-md">
+                Set Board Numbers
+            </button>
+        </div>
+
+        <!-- The Board Display -->
+        <div id="game-board" class="hidden grid grid-cols-2 sm:grid-cols-5 gap-4">
+            <!-- Board cells will be rendered here by JavaScript -->
+        </div>
+
+    </div>
+
+    <!-- Firebase Imports (Must be type="module") -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, runTransaction, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        setLogLevel('debug'); // Enable detailed logging
+
+        // Hardcoded application-level password for the Controller role
+        const CONTROLLER_PASSWORD = "HartselleBaseball!!"; 
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        
+        let userId = null;
+        let isController = false;
+
+        const GAME_DOC_PATH = `/artifacts/${appId}/public/data/hartselle-board-game/game-state`;
+        const BOARD_SIZE = 10;
+        const DEFAULT_NUMBERS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+        // DOM Elements
+        const loadingDiv = document.getElementById('loading');
+        const roleDisplay = document.getElementById('role-display');
+        const inputFormContainer = document.getElementById('input-form-container');
+        const numbersInput = document.getElementById('numbers-input');
+        const setNumbersBtn = document.getElementById('set-numbers-btn');
+        const gameBoardDiv = document.getElementById('game-board');
+        const messageBox = document.getElementById('message-box');
+        const loginScreen = document.getElementById('login-screen');
+        const viewBoardBtn = document.getElementById('view-board-btn');
+        const controllerLoginBtn = document.getElementById('controller-login-btn');
+        const controllerPasswordInput = document.getElementById('controller-password');
+        
+        // --- Utility Functions ---
+
+        /**
+         * Shows a temporary message to the user.
+         * @param {string} message The message text.
+         * @param {string} type 'success' or 'error' for styling.
+         */
+        function showMessage(message, type = 'success') {
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden', 'bg-red-900/50', 'bg-green-900/50', 'text-red-300', 'text-green-300');
+            
+            if (type === 'error') {
+                messageBox.classList.add('bg-red-900/50', 'text-red-300');
+            } else {
+                messageBox.classList.add('bg-green-900/50', 'text-green-300');
+            }
+
+            setTimeout(() => {
+                messageBox.classList.add('hidden');
+            }, 4000);
+        }
+
+        /**
+         * Displays the initial login/access screen.
+         */
+        function showLoginScreen() {
+            loginScreen.classList.remove('hidden');
+            gameBoardDiv.classList.add('hidden');
+            inputFormContainer.classList.add('hidden');
+            roleDisplay.textContent = `Your User ID: ${userId ? userId.substring(0, 8) + '...' : 'N/A'}`;
+        }
+
+
+        // --- Authentication and Initialization ---
+
+        async function authenticateAndInit() {
+            try {
+                // Set persistence to local to maintain session across refreshes
+                await setPersistence(auth, browserLocalPersistence);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Wait for auth state to be ready
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        loadingDiv.classList.add('hidden');
+                        showLoginScreen();
+                    } else {
+                        console.error("Authentication failed: User is null after sign-in.");
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase Auth Error:", error);
+                loadingDiv.innerHTML = `<p class="text-red-500">Error initializing authentication: ${error.message}</p>`;
+            }
+        }
+
+        // --- Core Game Logic & Data Sync ---
+
+        /**
+         * Sets up the single, persistent real-time listener for the game state.
+         */
+        function setupRealTimeListener() {
+            const gameDocRef = doc(db, GAME_DOC_PATH);
+            
+            onSnapshot(gameDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    renderUI(data);
+                } else {
+                    // Document deleted, prompt to re-initialize 
+                    console.warn("Game document does not exist. Sending back to login screen.");
+                    showLoginScreen();
+                }
+            });
+        }
+        
+        /**
+         * Starts the application in Viewer mode.
+         */
+        function startViewerMode() {
+            isController = false;
+            loginScreen.classList.add('hidden');
+            gameBoardDiv.classList.remove('hidden');
+            setupRealTimeListener();
+        }
+
+        /**
+         * Attempts to claim the controller role.
+         * @param {string} claimedByUserId The unique ID of the user attempting to claim control.
+         */
+        async function attemptControllerClaim(claimedByUserId) {
+            const gameDocRef = doc(db, GAME_DOC_PATH);
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const docSnap = await transaction.get(gameDocRef);
+                    
+                    if (!docSnap.exists()) {
+                        // If document doesn't exist, create it and make current user the controller
+                        const initialData = {
+                            controllerId: claimedByUserId,
+                            numbers: DEFAULT_NUMBERS,
+                            states: Array(BOARD_SIZE).fill(0),
+                            lastUpdated: new Date().toISOString()
+                        };
+                        transaction.set(gameDocRef, initialData);
+                        isController = true;
+                    } else {
+                        const data = docSnap.data();
+                        
+                        // Check if controller is free or currently held by this user
+                        if (!data.controllerId || data.controllerId === claimedByUserId) {
+                            transaction.update(gameDocRef, { controllerId: claimedByUserId, lastUpdated: new Date().toISOString() });
+                            isController = true;
+                        } else {
+                            isController = false;
+                            throw new Error("Controller role is currently active and occupied by another user.");
+                        }
+                    }
+                });
+                
+                // If transaction succeeds, start listener and show board
+                loginScreen.classList.add('hidden');
+                gameBoardDiv.classList.remove('hidden');
+                setupRealTimeListener();
+                showMessage("Controller access granted!", 'success');
+
+            } catch (error) {
+                console.error("Controller claim failed:", error);
+                showMessage(error.message || "Failed to claim controller role. Try again.", 'error');
+                // If claim failed, send them back to the login screen
+                showLoginScreen();
+            }
+        }
+
+
+        /**
+         * Renders the UI based on the fetched game data.
+         * @param {object} data The game state from Firestore.
+         */
+        function renderUI(data) {
+            loadingDiv.classList.add('hidden');
+            gameBoardDiv.classList.remove('hidden');
+
+            const boardNumbers = data.numbers || Array(BOARD_SIZE).fill('N/A');
+            const boardStates = data.states || Array(BOARD_SIZE).fill(0);
+            
+            // Determine controller status based on the document state
+            const currentControllerId = data.controllerId;
+            const wasController = isController;
+            isController = (userId === currentControllerId);
+
+            roleDisplay.textContent = isController 
+                ? `Role: Controller (Your ID: ${userId.substring(0, 8)}...)`
+                : `Role: Viewer (Controller ID: ${currentControllerId ? currentControllerId.substring(0, 8) + '...' : 'None'})`;
+            
+            // Show/Hide Input Form
+            if (isController) {
+                inputFormContainer.classList.remove('hidden');
+            } else {
+                inputFormContainer.classList.add('hidden');
+            }
+            
+            // If role changed from viewer to controller or vice versa, we need to re-render the board for click handlers
+            if (wasController !== isController || gameBoardDiv.children.length === 0) {
+                 // Render the Board
+                gameBoardDiv.innerHTML = ''; // Clear existing cells
+                
+                boardNumbers.slice(0, BOARD_SIZE).forEach((number, index) => {
+                    const state = boardStates[index] || 0;
+                    const cell = document.createElement('div');
+                    cell.className = `board-cell state-${state} flex items-center justify-center aspect-square text-2xl md:text-4xl rounded-xl select-none`;
+                    cell.textContent = number;
+                    cell.dataset.index = index;
+
+                    if (isController) {
+                        cell.addEventListener('click', handleCellClick);
+                        cell.classList.add('cursor-pointer', 'hover:ring-4', 'hover:ring-red-300');
+                    } else {
+                        cell.classList.remove('cursor-pointer', 'hover:ring-4');
+                    }
+
+                    gameBoardDiv.appendChild(cell);
+                });
+            } else {
+                // Only update the state of existing cells for efficiency
+                boardNumbers.slice(0, BOARD_SIZE).forEach((number, index) => {
+                    const state = boardStates[index] || 0;
+                    const cell = gameBoardDiv.children[index];
+                    if (cell) {
+                        cell.className = `board-cell state-${state} flex items-center justify-center aspect-square text-2xl md:text-4xl rounded-xl select-none ${isController ? 'cursor-pointer hover:ring-4 hover:ring-red-300' : ''}`;
+                        cell.textContent = number;
+                    }
+                });
+            }
+        }
+
+        /**
+         * Handles the click event on a board cell (Controller only).
+         * @param {Event} event 
+         */
+        async function handleCellClick(event) {
+            if (!isController) return; 
+
+            const index = parseInt(event.currentTarget.dataset.index, 10);
+            const gameDocRef = doc(db, GAME_DOC_PATH);
+
+            try {
+                // Use a transaction to ensure we read the latest state before writing
+                await runTransaction(db, async (transaction) => {
+                    const docSnap = await transaction.get(gameDocRef);
+                    if (!docSnap.exists()) throw "Document does not exist!";
+
+                    const data = docSnap.data();
+                    let newStates = [...(data.states || Array(BOARD_SIZE).fill(0))];
+
+                    // Cycle the state: 0 (White) -> 1 (Black) -> 2 (Red) -> 0 (White)
+                    let currentState = newStates[index] || 0;
+                    const nextState = (currentState + 1) % 3;
+                    newStates[index] = nextState;
+
+                    // Update the states array in Firestore
+                    transaction.update(gameDocRef, {
+                        states: newStates,
+                        lastUpdated: new Date().toISOString()
+                    });
+                });
+            } catch (error) {
+                console.error("Cell click transaction failed:", error);
+                showMessage("Update failed. Check console for details.", 'error');
+            }
+        }
+
+        /**
+         * Handles the form submission to set new board numbers (Controller only).
+         */
+        setNumbersBtn.addEventListener('click', async () => {
+            if (!isController) return;
+
+            const input = numbersInput.value.trim();
+            const rawNumbers = input.split(',').map(s => s.trim()).filter(s => s.length > 0);
+            
+            if (rawNumbers.length !== BOARD_SIZE) {
+                showMessage(`Please input exactly ${BOARD_SIZE} comma-separated values. You provided ${rawNumbers.length}.`, 'error');
+                return;
+            }
+
+            const gameDocRef = doc(db, GAME_DOC_PATH);
+            
+            try {
+                // Update numbers and reset states (to white/0)
+                await setDoc(gameDocRef, {
+                    numbers: rawNumbers,
+                    states: Array(BOARD_SIZE).fill(0), // Reset states
+                    controllerId: userId, // Reaffirm control
+                    lastUpdated: new Date().toISOString()
+                }, { merge: true });
+
+                showMessage("Board numbers updated and states reset!", 'success');
+            } catch (error) {
+                console.error("Setting numbers failed:", error);
+                showMessage("Failed to set numbers. See console.", 'error');
+            }
+        });
+
+        // --- Login Screen Event Listeners ---
+
+        viewBoardBtn.addEventListener('click', startViewerMode);
+
+        controllerLoginBtn.addEventListener('click', () => {
+            const password = controllerPasswordInput.value.trim();
+            if (password === CONTROLLER_PASSWORD) {
+                attemptControllerClaim(userId);
+                controllerPasswordInput.value = ''; // Clear password field
+            } else {
+                showMessage("Incorrect password.", 'error');
+            }
+        });
+
+        // Start the application
+        authenticateAndInit();
+
+    </script>
+</body>
+</html>
