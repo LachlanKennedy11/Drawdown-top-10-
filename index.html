@@ -181,7 +181,7 @@
 
             setTimeout(() => {
                 messageBox.classList.add('hidden');
-            }, 4000);
+            }, 8000); // Increased duration for error messages
         }
 
         /**
@@ -318,7 +318,15 @@
 
             } catch (error) {
                 console.error("Controller claim failed:", error);
-                showMessage(error.message || "Failed to claim controller role. Try again.", 'error');
+                
+                // Enhanced error reporting for common Firebase errors (like Permission Denied)
+                let errorMessage = error.message || "Failed to claim controller role. Try again.";
+                if (errorMessage.includes('permission denied') || errorMessage.includes('NO_AUTH')) {
+                    errorMessage = "Permission Denied! Check your Firestore Security Rules in the Firebase Console and ensure they are published.";
+                }
+                
+                showMessage(errorMessage, 'error');
+                
                 // If claim failed, send them back to the login screen
                 showLoginScreen();
             }
@@ -461,8 +469,13 @@
         controllerLoginBtn.addEventListener('click', () => {
             const password = controllerPasswordInput.value.trim();
             if (password === CONTROLLER_PASSWORD) {
-                attemptControllerClaim(userId);
-                controllerPasswordInput.value = ''; // Clear password field
+                // IMPORTANT: Check if userId is available before attempting the claim
+                if (userId) { 
+                    attemptControllerClaim(userId);
+                    controllerPasswordInput.value = ''; // Clear password field
+                } else {
+                    showMessage("Authentication not ready. Please wait a moment and try again.", 'error');
+                }
             } else {
                 showMessage("Incorrect password.", 'error');
             }
