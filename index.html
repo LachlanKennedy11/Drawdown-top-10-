@@ -108,7 +108,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, runTransaction, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, runTransaction, setLogLevel, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // ====================================================================================
         // Custom Firebase Configuration for GitHub/Local Use 
@@ -277,6 +277,7 @@
 
         /**
          * Attempts to claim the controller role.
+         * NOTE: This function only runs if the password was already correct.
          * @param {string} claimedByUserId The unique ID of the user attempting to claim control.
          */
         async function attemptControllerClaim(claimedByUserId) {
@@ -286,28 +287,25 @@
                 await runTransaction(db, async (transaction) => {
                     const docSnap = await transaction.get(gameDocRef);
                     
+                    const updateData = {
+                        controllerId: claimedByUserId,
+                        lastUpdated: new Date().toISOString()
+                    };
+
+                    // Since the user knows the password, they are authorized to take control.
                     if (!docSnap.exists()) {
-                        // If document doesn't exist, create it and make current user the controller
+                        // If document doesn't exist, create it with default data
                         const initialData = {
-                            controllerId: claimedByUserId,
                             numbers: DEFAULT_NUMBERS,
                             states: Array(BOARD_SIZE).fill(0),
-                            lastUpdated: new Date().toISOString()
+                            ...updateData
                         };
                         transaction.set(gameDocRef, initialData);
-                        isController = true;
                     } else {
-                        const data = docSnap.data();
-                        
-                        // Check if controller is free or currently held by this user
-                        if (!data.controllerId || data.controllerId === claimedByUserId) {
-                            transaction.update(gameDocRef, { controllerId: claimedByUserId, lastUpdated: new Date().toISOString() });
-                            isController = true;
-                        } else {
-                            isController = false;
-                            throw new Error("Controller role is currently active and occupied by another user.");
-                        }
+                        // Document exists. Update it unconditionally to claim control.
+                        transaction.update(gameDocRef, updateData);
                     }
+                    isController = true; 
                 });
                 
                 // If transaction succeeds, start listener and show board
@@ -317,7 +315,7 @@
                 showMessage("Controller access granted!", 'success');
 
             } catch (error) {
-                console.error("Controller claim failed:", error);
+                console.error("CRITICAL ERROR: Controller claim failed during runTransaction. Details:", error);
                 
                 // Enhanced error reporting for common Firebase errors (like Permission Denied)
                 let errorMessage = error.message || "Failed to claim controller role. Try again.";
@@ -448,12 +446,12 @@
             
             try {
                 // Update numbers and reset states (to white/0)
-                await setDoc(gameDocRef, {
+                await updateDoc(gameDocRef, { // Changed from setDoc to updateDoc
                     numbers: rawNumbers,
                     states: Array(BOARD_SIZE).fill(0), // Reset states
                     controllerId: userId, // Reaffirm control
                     lastUpdated: new Date().toISOString()
-                }, { merge: true });
+                });
 
                 showMessage("Board numbers updated and states reset!", 'success');
             } catch (error) {
@@ -471,10 +469,12 @@
             if (password === CONTROLLER_PASSWORD) {
                 // IMPORTANT: Check if userId is available before attempting the claim
                 if (userId) { 
+                    console.log("LOGIN ATTEMPT: User ID is ready. Proceeding to claim control in database.");
                     attemptControllerClaim(userId);
                     controllerPasswordInput.value = ''; // Clear password field
                 } else {
                     showMessage("Authentication not ready. Please wait a moment and try again.", 'error');
+                    console.error("LOGIN FAILED: userId is null. Auth state did not fully initialize.");
                 }
             } else {
                 showMessage("Incorrect password.", 'error');
